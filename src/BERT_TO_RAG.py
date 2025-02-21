@@ -6,19 +6,17 @@
 @file for: 
 """
 
-import os
-import pickle
 import torch
-from langchain.text_splitter import CharacterTextSplitter
 from transformers import BertTokenizer, BertModel, AutoTokenizer, AutoModel
 import faiss
 import numpy as np
 from tqdm import tqdm
 
 from config.local_config import FinBERT
+from utils.common_util import cache_doc_chunks, get_text_chunks, get_data_documents
 
 
-def get_embedding(text, tokenizer, model, max_length=128):
+def get_embedding(text, tokenizer, model, device, max_length=128):
     inputs = tokenizer(text, return_tensors='pt', truncation=True, padding='max_length', max_length=max_length)
     inputs = {key: val.to(device) for key, val in inputs.items()}  # 确保输入在 GPU 上
     with torch.no_grad():
@@ -45,7 +43,7 @@ def get_embedding(text, tokenizer, model, max_length=128):
 #     return embeddings
 
 
-def text_vectorization(doc_chunks, tokenizer, model, batch_size=64):
+def text_vectorization(doc_chunks, tokenizer, model, device, batch_size=64):
     embeddings = []
     with tqdm(total=len(doc_chunks)) as pbar:
         for i in range(0, len(doc_chunks), batch_size):
@@ -80,36 +78,6 @@ def text_vectorization(doc_chunks, tokenizer, model, batch_size=64):
 # print("检索到的文档：", retrieved_docs)
 
 
-def load_text_file(filepath):
-    with open(filepath, 'r', encoding='utf-8') as f:
-        return f.read()
-
-
-def get_text_chunks(documents):
-    text_splitter = CharacterTextSplitter(chunk_size=100, chunk_overlap=10)
-    doc_chunks = []
-    for doc in documents:
-        try:
-            chunks = text_splitter.split_text(doc)
-            doc_chunks.extend(chunks)
-        except Exception as e:
-            print(f"分割文档时出错: {e}")
-    print(f"共获得 {len(doc_chunks)} 个文本块")
-    return doc_chunks
-
-
-def cache_doc_chunks(doc_chunks):
-    cache_dir = os.path.join('..', 'pickle_cached')
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_path = os.path.join(cache_dir, 'doc_chunks_cache.pkl')
-    try:
-        with open(cache_path, 'wb') as f:
-            pickle.dump(doc_chunks, f)
-        print(f"成功缓存文本块到 {cache_path}")
-    except Exception as e:
-        print(f"缓存文本块失败: {e}")
-
-
 def save_to_vector_database(embeddings):
     try:
         vectors = np.array(embeddings).astype('float32')
@@ -123,8 +91,7 @@ def save_to_vector_database(embeddings):
         print(f"保存向量索引失败: {e}")
 
 
-if __name__ == '__main__':
-
+def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 1. 加载BERT模型和分词器
@@ -136,20 +103,13 @@ if __name__ == '__main__':
     model.to(device)
     model.eval()  # 设为评估模式
 
-    data_dir = "../data"
-    documents = []
-    try:
-        for filename in os.listdir(data_dir):
-            if filename.endswith(".txt"):
-                text = load_text_file(os.path.join(data_dir, filename))
-                text_lit = text.split('\n')
-                print(f"text_lit: {len(text_lit)}")
-                for text_item in text_lit:
-                    documents.append(text_item)
-    except Exception as e:
-        print(f"读取数据目录失败: {e}")
+    documents = get_data_documents()
 
     doc_chunks = get_text_chunks(documents)
-    embeddings = text_vectorization(doc_chunks, tokenizer, model)
+    embeddings = text_vectorization(doc_chunks, tokenizer, model, device)
     save_to_vector_database(embeddings)
     cache_doc_chunks(doc_chunks)
+
+
+if __name__ == '__main__':
+    main()
